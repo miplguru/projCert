@@ -18,7 +18,7 @@ pipeline {
     stage('Install Docker on Targets (Ansible)') {
       steps {
         // run ansible playbook that installs docker on targets using local ansible
-        sh 'ansible-playbook -i ansible/inventory.ini ansible/install-docker.yml --ssh-extra-args="-o StrictHostKeyChecking=no"'
+        sh 'ansible-playbook -i /var/lib/jenkins/ci-cd/ansible/inventory.ini /var/lib/jenkins/ci-cd/ansible/install-docker.yml --ssh-extra-args="-o StrictHostKeyChecking=no"'
       }
     }
 
