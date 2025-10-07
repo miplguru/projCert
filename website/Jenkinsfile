@@ -1,0 +1,81 @@
+pipeline {
+  agent any
+
+  environment {
+    TEST_HOST = '192.168.4.133'
+        SSH_CRED = 'jenkins-ssh'           // Jenkins credential id for SSH
+    DOCKER_HUB = 'ngururaj'     // change as needed
+    IMAGE_NAME = "${DOCKER_HUB}/php-app:v1.0"
+  }
+
+  stages {
+    stage('Checkout') {
+      steps {
+        checkout scm
+      }
+    }
+
+    stage('Install Docker on Targets (Ansible)') {
+      steps {
+        // run ansible playbook that installs docker on targets using local ansible
+        sh 'ansible-playbook -i ansible/inventory.ini ansible/install-docker.yml --ssh-extra-args="-o StrictHostKeyChecking=no"'
+      }
+    }
+
+    stage('Build image on TEST server') {
+      steps {
+        // Build on test server via ssh using remote docker
+        sshagent (credentials: [SSH_CRED]) {
+          sh """
+            ssh -o StrictHostKeyChecking=no jenkins@${TEST_HOST} 'bash -s' <<'EOSSH'
+              rm -rf /home/jenkins/app || true
+              git clone https://github.com/edureka-devops/projCert.git /home/jenkins/app
+              cd /home/jenkins/app
+              docker build -t php-app:latest .
+              docker rm -f php-app || true
+              docker run -d --name php-app -p 80:80 php-app:latest
+            EOSSH
+          """
+        }
+      }
+    }
+
+    stage('Push to Docker Hub & Deploy to Prod') {
+      steps {
+        withCredentials([usernamePassword(credentialsId: 'docker-hub-creds', usernameVariable: 'DOCKER_USER', passwordVariable: 'DOCKER_PASS')]) {
+          sh """
+            # Build locally on master (optional) and push
+            docker --version || true
+            # If you want to build on master:
+            docker build -t ${IMAGE_NAME}:$BUILD_ID .
+            echo $DOCKER_PASS | docker login -u $DOCKER_USER --password-stdin
+            docker push ${IMAGE_NAME}:$BUILD_ID
+          """
+
+          // Deploy to prod via ssh and run container
+          sshagent (credentials: [SSH_CRED]) {
+            sh """
+              ssh -o StrictHostKeyChecking=no jenkins@${PROD_HOST} 'bash -s' <<'EOSSH'
+                docker pull ${IMAGE_NAME}:$BUILD_ID
+                docker rm -f php-app || true
+                docker run -d --name php-app -p 80:80 ${IMAGE_NAME}:$BUILD_ID
+              EOSSH
+            """
+          }
+        }
+      }
+    }
+  } // stages
+
+  post {
+    failure {
+      // If failure, ensure test-server container removed
+      sshagent (credentials: [SSH_CRED]) {
+        sh "ssh -o StrictHostKeyChecking=no jenkins@${TEST_HOST} 'docker rm -f php-app || true'"
+      }
+    }
+    success {
+      echo "Pipeline complete."
+    }
+  }
+}
